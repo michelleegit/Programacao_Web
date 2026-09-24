@@ -1,0 +1,178 @@
+document.documentElement.classList.add('js');
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ===== Navegação: fundo ao rolar, bateria e link ativo ===== */
+const nav = document.querySelector('.nav');
+const fill = document.querySelector('.battery-fill');
+const pct = document.querySelector('.battery-pct');
+const hero = document.querySelector('.hero');
+
+function onScroll() {
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const p = max > 0 ? Math.round((window.scrollY / max) * 100) : 0;
+  fill.style.width = p + '%';
+  pct.textContent = p + '%';
+  nav.classList.toggle('is-scrolled', window.scrollY > hero.offsetHeight - 80);
+}
+window.addEventListener('scroll', onScroll, { passive: true });
+onScroll();
+
+const links = document.querySelectorAll('.nav-links a');
+const sectionObserver = new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    if (!entry.isIntersecting) return;
+    links.forEach((a) => a.classList.toggle('is-active', a.getAttribute('href') === '#' + entry.target.id));
+  });
+}, { rootMargin: '-45% 0px -50% 0px' });
+document.querySelectorAll('main section, footer').forEach((s) => sectionObserver.observe(s));
+
+/* ===== Revelar ao rolar + contador ===== */
+function countUp(el) {
+  const target = Number(el.dataset.count);
+  if (reduceMotion) { el.textContent = target; return; }
+  const start = performance.now();
+  const dur = 1400;
+  (function tick(now) {
+    const t = Math.min((now - start) / dur, 1);
+    el.textContent = Math.round(target * (1 - Math.pow(1 - t, 3)));
+    if (t < 1) requestAnimationFrame(tick);
+  })(start);
+}
+
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    if (!entry.isIntersecting) return;
+    entry.target.classList.add('is-visible');
+    entry.target.querySelectorAll('[data-count]').forEach(countUp);
+    revealObserver.unobserve(entry.target);
+  });
+}, { threshold: 0, rootMargin: '0px 0px -10% 0px' });
+document.querySelectorAll('.reveal').forEach((el, i) => {
+  el.style.transitionDelay = (i % 4) * 80 + 'ms';
+  revealObserver.observe(el);
+});
+
+/* ===== Brilho dos cards seguindo o mouse ===== */
+document.querySelectorAll('.card').forEach((card) => {
+  card.addEventListener('pointermove', (e) => {
+    const r = card.getBoundingClientRect();
+    card.style.setProperty('--mx', (e.clientX - r.left) + 'px');
+    card.style.setProperty('--my', (e.clientY - r.top) + 'px');
+  });
+});
+
+/* ===== Fundo do hero: rede ramificada que cresce e "carros" percorrendo ===== */
+const canvas = document.querySelector('.hero-canvas');
+const ctx = canvas.getContext('2d');
+let segs = [], cars = [], W = 0, H = 0, startTime = 0, growDone = 0;
+
+function rand(a, b) { return a + Math.random() * (b - a); }
+
+function build() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = canvas.clientWidth; H = canvas.clientHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  segs = [];
+  const maxDepth = W < 700 ? 6 : 8;
+  const speed = 4; // ms por pixel
+
+  function branch(x, y, ang, len, depth, t0, parent) {
+    if (depth > maxDepth || len < 10) return;
+    const x2 = x + Math.cos(ang) * len;
+    const y2 = y + Math.sin(ang) * len;
+    const seg = { x, y, x2, y2, depth, t0, dur: len * speed, kids: [], parent };
+    const idx = segs.push(seg) - 1;
+    if (parent != null) segs[parent].kids.push(idx);
+    const n = depth < 3 || Math.random() < 0.75 ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const spread = n === 1 ? rand(-0.3, 0.3) : (i === 0 ? -1 : 1) * rand(0.25, 0.6);
+      branch(x2, y2, ang + spread, len * rand(0.68, 0.84), depth + 1, t0 + seg.dur, idx);
+    }
+  }
+
+  const base = Math.max(W, H) * 0.12;
+  branch(-10, H * 0.85, -0.35, base, 0, 0, null);
+  branch(W + 10, H * 0.2, Math.PI + 0.3, base, 0, 250, null);
+  branch(W * 0.55, H + 10, -Math.PI / 2 - 0.15, base * 0.9, 0, 500, null);
+
+  growDone = Math.max(...segs.map((s) => s.t0 + s.dur));
+  cars = Array.from({ length: W < 700 ? 6 : 12 }, () => newCar());
+  startTime = performance.now();
+}
+
+function newCar() {
+  const roots = segs.map((s, i) => (s.parent == null ? i : -1)).filter((i) => i >= 0);
+  return { seg: roots[Math.floor(Math.random() * roots.length)], t: 0, v: rand(0.006, 0.014), delay: rand(0, 3000) };
+}
+
+function draw(now) {
+  const elapsed = reduceMotion ? Infinity : now - startTime;
+  ctx.clearRect(0, 0, W, H);
+
+  // ramos
+  ctx.lineCap = 'round';
+  for (const s of segs) {
+    const p = Math.max(0, Math.min(1, (elapsed - s.t0) / s.dur));
+    if (p <= 0) continue;
+    ctx.strokeStyle = `rgba(169, 179, 201, ${0.32 - s.depth * 0.025})`;
+    ctx.lineWidth = Math.max(0.6, 3 - s.depth * 0.35);
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(s.x + (s.x2 - s.x) * p, s.y + (s.y2 - s.y) * p);
+    ctx.stroke();
+    // "postos" nas pontas
+    if (p === 1 && s.kids.length === 0) {
+      ctx.fillStyle = 'rgba(242, 179, 61, 0.55)';
+      ctx.beginPath(); ctx.arc(s.x2, s.y2, 2, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // carros percorrendo a rede depois que ela cresce
+  if (!reduceMotion && elapsed > growDone) {
+    for (let i = 0; i < cars.length; i++) {
+      const c = cars[i];
+      if (c.delay > 0) { c.delay -= 16; continue; }
+      const s = segs[c.seg];
+      c.t += c.v * (1 + s.depth * 0.15);
+      if (c.t >= 1) {
+        if (s.kids.length === 0) { cars[i] = newCar(); continue; }
+        c.seg = s.kids[Math.floor(Math.random() * s.kids.length)];
+        c.t = 0;
+        continue;
+      }
+      const x = s.x + (s.x2 - s.x) * c.t;
+      const y = s.y + (s.y2 - s.y) * c.t;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 10);
+      g.addColorStop(0, 'rgba(242, 179, 61, 0.9)');
+      g.addColorStop(1, 'rgba(242, 179, 61, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  if (!reduceMotion) requestAnimationFrame(draw);
+}
+
+let resizeTimer;
+let lastWidth = window.innerWidth;
+window.addEventListener('resize', () => {
+  if (window.innerWidth === lastWidth) return; // ignora a barra do navegador no celular
+  lastWidth = window.innerWidth;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { build(); if (reduceMotion) draw(0); }, 200);
+});
+
+build();
+reduceMotion ? draw(0) : requestAnimationFrame(draw);
+
+/* ===== Links internos (#secao) rolam até a seção ===== */
+document.querySelectorAll('a[href^="#"]').forEach((link) => {
+  link.addEventListener('click', (e) => {
+    const alvo = document.querySelector(link.getAttribute('href'));
+    if (!alvo) return;
+    e.preventDefault();
+    alvo.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth' });
+  });
+});
